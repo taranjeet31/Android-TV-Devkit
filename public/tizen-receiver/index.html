@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TVDev Studio — TV Cursor Receiver</title>
+  <style>
+    /* ── Reset & Base ───────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: transparent;
+      overflow: hidden;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #fff;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* ── Status overlay (shown when disconnected) ───────────────────── */
+    #status-overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(8px);
+      z-index: 9000;
+      transition: opacity 0.4s ease;
+    }
+
+    #status-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .status-icon {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px;
+    }
+
+    .status-icon.connecting { background: rgba(255,190,0,0.2); animation: pulse 1.5s ease infinite; }
+    .status-icon.error      { background: rgba(255,60,60,0.2); }
+    .status-icon.connected  { background: rgba(0,230,118,0.2); }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,190,0,0.4); }
+      50%       { box-shadow: 0 0 0 16px rgba(255,190,0,0); }
+    }
+
+    .status-title  { font-size: 22px; font-weight: 600; }
+    .status-detail { font-size: 14px; color: rgba(255,255,255,0.5); max-width: 340px; text-align: center; line-height: 1.5; }
+
+    /* ── Virtual cursor ──────────────────────────────────────────────── */
+    #virtual-cursor {
+      position: fixed;
+      width: 24px; height: 24px;
+      pointer-events: none;
+      z-index: 9999;
+      transform: translate(-4px, -4px); /* hotspot at top-left corner of arrow */
+      transition: opacity 0.2s ease;
+      opacity: 0;
+    }
+
+    #virtual-cursor.visible { opacity: 1; }
+
+    /* SVG arrow cursor */
+    #virtual-cursor svg {
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+    }
+
+    /* Click ripple */
+    #click-ripple {
+      position: fixed;
+      width: 0; height: 0;
+      border-radius: 50%;
+      background: rgba(99, 179, 237, 0.45);
+      pointer-events: none;
+      z-index: 9998;
+      transform: translate(-50%, -50%);
+      opacity: 0;
+    }
+
+    @keyframes ripple-expand {
+      0%   { width: 0; height: 0; opacity: 0.7; }
+      100% { width: 60px; height: 60px; opacity: 0; }
+    }
+
+    #click-ripple.active {
+      animation: ripple-expand 0.35s ease-out forwards;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Status overlay — shown when disconnected / connecting -->
+  <div id="status-overlay">
+    <div class="status-icon connecting" id="status-icon">📡</div>
+    <div class="status-title" id="status-title">Connecting…</div>
+    <div class="status-detail" id="status-detail">Waiting for TVDev Studio on your Mac.</div>
+  </div>
+
+  <!-- Virtual cursor arrow -->
+  <div id="virtual-cursor">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4 2L20 12L12 13.5L8.5 20L4 2Z" fill="white" stroke="#333" stroke-width="1.5" stroke-linejoin="round"/>
+    </svg>
+  </div>
+
+  <!-- Click ripple effect -->
+  <div id="click-ripple"></div>
+
+  <script>
+    // ── Configuration ──────────────────────────────────────────────────
+    // Read token + host from URL query params:
+    // e.g. http://192.168.1.5:8080/tizen-receiver/index.html?host=192.168.1.5&port=9877&token=abc123
+    const params = new URLSearchParams(window.location.search);
+    const WS_HOST  = params.get('host')  || window.location.hostname;
+    const WS_PORT  = params.get('port')  || '9877';
+    const WS_TOKEN = params.get('token') || '';
+    const RECONNECT_DELAY_MS = 3000;
+
+    // ── DOM refs ───────────────────────────────────────────────────────
+    const overlay     = document.getElementById('status-overlay');
+    const statusIcon  = document.getElementById('status-icon');
+    const statusTitle = document.getElementById('status-title');
+    const statusDetail= document.getElementById('status-detail');
+    const cursor      = document.getElementById('virtual-cursor');
+    const ripple      = document.getElementById('click-ripple');
+
+    // ── State ──────────────────────────────────────────────────────────
+    let vx = window.innerWidth  / 2;
+    let vy = window.innerHeight / 2;
+    let screenW = window.innerWidth;
+    let screenH = window.innerHeight;
+    let isConnected = false;
+    let ws = null;
+    let reconnectTimer = null;
+
+    // ── Cursor helpers ─────────────────────────────────────────────────
+    function moveCursor(x, y) {
+      vx = Math.max(0, Math.min(screenW - 1, x));
+      vy = Math.max(0, Math.min(screenH - 1, y));
+      cursor.style.left = vx + 'px';
+      cursor.style.top  = vy + 'px';
+    }
+
+    function showCursor() {
+      cursor.classList.add('visible');
+    }
+
+    function hideCursor() {
+      cursor.classList.remove('visible');
+    }
+
+    function fireRipple(x, y) {
+      ripple.style.left = x + 'px';
+      ripple.style.top  = y + 'px';
+      ripple.classList.remove('active');
+      void ripple.offsetWidth; // force reflow
+      ripple.classList.add('active');
+    }
+
+    // ── Tizen input injection ──────────────────────────────────────────
+    // Samsung Tizen Smart TV SDKs expose tizen.inputdevice for key events,
+    // and the webview supports synthesised pointer events.
+    // We use elementFromPoint + PointerEvent dispatch for tap/drag.
+
+    let pointerDownEl = null;
+    let pointerDownX  = 0;
+    let pointerDownY  = 0;
+
+    function dispatchPointerAt(x, y, type, isPrimary) {
+      const el = document.elementFromPoint(x, y) || document.body;
+      const evt = new PointerEvent(type, {
+        bubbles: true, cancelable: true,
+        clientX: x, clientY: y,
+        pointerId: 1, pointerType: 'mouse',
+        isPrimary: true,
+      });
+      el.dispatchEvent(evt);
+      return el;
+    }
+
+    function handleButtonDown(button) {
+      if (button !== 'left') return;
+      pointerDownEl = dispatchPointerAt(vx, vy, 'pointerdown', true);
+      pointerDownX  = vx;
+      pointerDownY  = vy;
+    }
+
+    function handleButtonUp(button) {
+      if (button !== 'left') return;
+      dispatchPointerAt(vx, vy, 'pointerup', true);
+
+      const dx = Math.abs(vx - pointerDownX);
+      const dy = Math.abs(vy - pointerDownY);
+      if (dx < 8 && dy < 8) {
+        // Tap — dispatch click
+        const el = dispatchPointerAt(vx, vy, 'click', true);
+        fireRipple(vx, vy);
+        // Also try the element directly as some TV apps listen for 'click'
+        const clickEvt = new MouseEvent('click', {
+          bubbles: true, cancelable: true, clientX: vx, clientY: vy
+        });
+        el.dispatchEvent(clickEvt);
+      }
+      pointerDownEl = null;
+    }
+
+    // ── Status UI helpers ──────────────────────────────────────────────
+    function setStatus(icon, iconClass, title, detail) {
+      statusIcon.textContent = icon;
+      statusIcon.className   = 'status-icon ' + iconClass;
+      statusTitle.textContent  = title;
+      statusDetail.textContent = detail;
+    }
+
+    function showOverlay() {
+      overlay.classList.remove('hidden');
+    }
+
+    function hideOverlay() {
+      overlay.classList.add('hidden');
+    }
+
+    // ── WebSocket connection ───────────────────────────────────────────
+    function connect() {
+      const url = `ws://${WS_HOST}:${WS_PORT}${WS_TOKEN ? '?token=' + WS_TOKEN : ''}`;
+      setStatus('📡', 'connecting', 'Connecting…', `ws://${WS_HOST}:${WS_PORT}`);
+      showOverlay();
+
+      try {
+        ws = new WebSocket(url);
+      } catch (e) {
+        scheduleReconnect();
+        return;
+      }
+
+      ws.addEventListener('open', () => {
+        isConnected = true;
+        setStatus('✅', 'connected', 'Connected', 'TVDev Studio cursor active');
+        setTimeout(hideOverlay, 800);
+        showCursor();
+      });
+
+      ws.addEventListener('message', (evt) => {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch { return; }
+        handleMessage(msg);
+      });
+
+      ws.addEventListener('close', () => {
+        isConnected = false;
+        hideCursor();
+        setStatus('🔌', 'error', 'Disconnected', 'TVDev Studio disconnected. Retrying…');
+        showOverlay();
+        scheduleReconnect();
+      });
+
+      ws.addEventListener('error', () => {
+        // close event will fire next
+      });
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, RECONNECT_DELAY_MS);
+    }
+
+    // ── Message handler ────────────────────────────────────────────────
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case 'cursor_start':
+          // Use server-reported screen dimensions for coordinate mapping
+          screenW = msg.screen_w || window.innerWidth;
+          screenH = msg.screen_h || window.innerHeight;
+          vx = screenW / 2;
+          vy = screenH / 2;
+          moveCursor(vx, vy);
+          showCursor();
+          break;
+
+        case 'cursor_move':
+          moveCursor(vx + (msg.dx || 0), vy + (msg.dy || 0));
+          break;
+
+        case 'cursor_down':
+          handleButtonDown(msg.button);
+          break;
+
+        case 'cursor_up':
+          handleButtonUp(msg.button);
+          break;
+
+        case 'cursor_scroll': {
+          // Synthesise a WheelEvent at the current cursor position
+          const el = document.elementFromPoint(vx, vy) || document.body;
+          el.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true, cancelable: true,
+            clientX: vx, clientY: vy,
+            deltaX: (msg.dx || 0) * 10,
+            deltaY: (msg.dy || 0) * 10,
+            deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          }));
+          break;
+        }
+
+        case 'cursor_end':
+          hideCursor();
+          setStatus('🔴', 'error', 'Cursor Released', 'Press ⌘⇧L on your Mac to re-enable.');
+          showOverlay();
+          break;
+      }
+    }
+
+    // ── Init ───────────────────────────────────────────────────────────
+    window.addEventListener('resize', () => {
+      screenW = window.innerWidth;
+      screenH = window.innerHeight;
+    });
+
+    connect();
+  </script>
+</body>
+</html>
