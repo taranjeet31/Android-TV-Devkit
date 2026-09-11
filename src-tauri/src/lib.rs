@@ -37,6 +37,12 @@ fn disconnect_device(serial: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn reverse_port(serial: String, device_port: u16, host_port: u16) -> Result<String, String> {
+    adb::reverse_port(&serial, device_port, host_port).map_err(|e| e.to_string())
+}
+
+
+#[tauri::command]
 fn inject_key(serial: String, keycode: u32) -> Result<(), String> {
     adb::send_keyevent(&serial, keycode).map_err(|e| e.to_string())
 }
@@ -76,6 +82,25 @@ fn get_screenshot(serial: String) -> Result<String, String> {
 fn get_screenshot_raw(serial: String) -> Result<Vec<u8>, String> {
     adb::capture_screenshot_raw(&serial).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+fn launch_scrcpy(
+    serial: String,
+    connection_type: Option<String>,
+    max_fps: Option<u32>,
+    bit_rate_mb: Option<u32>,
+    max_size: Option<u32>,
+) -> Result<String, String> {
+    adb::launch_scrcpy(
+        &serial,
+        connection_type.as_deref(),
+        max_fps,
+        bit_rate_mb,
+        max_size,
+    )
+    .map_err(|e| e.to_string())
+}
+
 
 #[tauri::command]
 fn toggle_show_touches(serial: String, enabled: bool) -> Result<(), String> {
@@ -237,11 +262,13 @@ pub fn run() {
             scan_devices,
             connect_device,
             disconnect_device,
+            reverse_port,
             inject_key,
             inject_click,
             inject_swipe,
             get_screenshot,
             get_screenshot_raw,
+            launch_scrcpy,
             // Debug
             debug::start_logcat,
             debug::stop_logcat,

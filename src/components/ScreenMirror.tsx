@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useDeviceStore } from "../store/useDeviceStore";
-import { Monitor, Play, Square, Info, ShieldAlert, Cpu } from "lucide-react";
+import { Monitor, Play, Square, Info, ShieldAlert, Cpu, Wifi, Zap, CheckCircle2 } from "lucide-react";
 
 export interface ScreenMirrorProps {
   layoutMode?: "tab" | "workspace";
@@ -22,9 +22,28 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
   const [isPressing, setIsPressing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
+  const [scrcpyStatus, setScrcpyStatus] = useState<string | null>(null);
+  const [pollInterval, setPollInterval] = useState<number>(200); // ms between frames
 
   // Drag start state
   const dragStart = useRef<{ x: number; y: number; time: number } | null>(null);
+
+  const handleLaunchScrcpy = async (forceWifiMode?: boolean) => {
+    if (!selectedDevice) return;
+    setScrcpyStatus("Launching scrcpy...");
+    try {
+      const connType = forceWifiMode ? "wifi" : selectedDevice.connection_type;
+      const result = await invoke<string>("launch_scrcpy", {
+        serial: selectedDevice.serial,
+        connectionType: connType,
+      });
+      setScrcpyStatus(result);
+      setTimeout(() => setScrcpyStatus(null), 6000);
+    } catch (err: any) {
+      console.error("Scrcpy launch failed", err);
+      setScrcpyStatus(`Launch error: ${err.toString()}`);
+    }
+  };
 
   // Poll screenshot frames using raw binary bytes (Vec<u8>)
   useEffect(() => {
@@ -75,13 +94,13 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
       } catch (err: any) {
         console.error("Failed to capture screenshot", err);
         if (active) {
-          setErrorMsg("Screenshot capture failed. Ensure device screen is active and ADB is working.");
+          setErrorMsg("Screenshot capture failed. Ensure device screen is active and ADB is connected.");
         }
       }
       
       // Delay before next frame
       if (active) {
-        setTimeout(poll, 200); // 5 FPS fallback (smooth enough and low ADB load)
+        setTimeout(poll, pollInterval);
       }
     };
 
@@ -92,7 +111,7 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [screencapActive, selectedDevice]);
+  }, [screencapActive, selectedDevice, pollInterval]);
 
   // Convert local coordinates to Android device coordinates
   const getDeviceCoords = (clientX: number, clientY: number) => {
@@ -183,15 +202,6 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
     }
   };
 
-  const launchScrcpy = () => {
-    // Command description popup for users
-    alert(
-      "Native high-framerate scrcpy streaming requires scrcpy to be installed.\n\n" +
-      "If you have brew, run:\nbrew install scrcpy\n\n" +
-      "To mirror manually from terminal:\nscrcpy -s " + selectedDevice?.serial
-    );
-  };
-
   if (!selectedDevice) {
     return (
       <div className="flex-center" style={{ flexDirection: "column", height: "100%", color: "var(--color-text-muted)" }}>
@@ -203,40 +213,42 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
   }
 
   const resText = selectedDevice.resolution || "1920x1080";
+  const isWifiDevice = selectedDevice.connection_type === "wifi" || selectedDevice.serial.includes(":");
 
   const renderMainMirror = () => (
     <div className="card-panel" style={{ flexGrow: 1, height: "100%" }}>
       <div className="panel-header">
         <span className="panel-title">
-          <Monitor size={18} />
-          Android TV Display Mirror ({resText})
+          <Monitor size={18} style={{ color: "var(--color-accent-primary)" }} />
+          Display Mirror ({resText})
+          {isWifiDevice && (
+            <span className="badge badge-info" style={{ display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "6px" }}>
+              <Wifi size={10} /> Wi-Fi Device
+            </span>
+          )}
         </span>
         <div style={{ display: "flex", gap: "8px" }}>
-          {layoutMode === "workspace" && (
-            <button
-              className="btn-secondary"
-              style={{ padding: "6px 12px" }}
-              onClick={launchScrcpy}
-              title="Launch native high-framerate scrcpy window"
-            >
-              Scrcpy
-            </button>
-          )}
           <button
-            className={`btn-primary ${screencapActive ? "btn-secondary" : ""}`}
-            style={{
-              padding: "6px 12px",
-              backgroundColor: screencapActive ? "rgba(221, 2, 0, 0.15)" : "var(--color-accent-primary)"
-            }}
+            className="btn-primary"
+            style={{ padding: "6px 14px" }}
+            onClick={() => handleLaunchScrcpy()}
+            title="Launch high-framerate scrcpy mirror window"
+          >
+            <Zap size={14} /> Launch Scrcpy Mirror
+          </button>
+          
+          <button
+            className={`btn-secondary ${screencapActive ? "active" : ""}`}
+            style={{ padding: "6px 12px" }}
             onClick={() => setScreencapActive(!screencapActive)}
           >
             {screencapActive ? (
               <>
-                <Square size={14} /> Stop Stream
+                <Square size={14} /> Stop In-App Feed
               </>
             ) : (
               <>
-                <Play size={14} /> Start Stream
+                <Play size={14} /> Canvas Feed
               </>
             )}
           </button>
@@ -245,7 +257,7 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
 
       <div
         className="panel-body flex-center"
-        style={{ padding: 0, backgroundColor: "#000", position: "relative" }}
+        style={{ padding: 0, backgroundColor: "#06070a", position: "relative" }}
         ref={containerRef}
       >
         {screencapActive ? (
@@ -265,17 +277,16 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
                 <div
                   style={{
                     position: "absolute",
-                    left: cursorPos.x - 6,
-                    top: cursorPos.y - 6,
-                    width: "12px",
-                    height: "12px",
+                    left: cursorPos.x - 5,
+                    top: cursorPos.y - 5,
+                    width: "10px",
+                    height: "10px",
                     borderRadius: "50%",
-                    backgroundColor: isPressing ? "var(--color-accent-primary)" : "rgba(221, 2, 0, 0.5)",
-                    border: "2px solid #white",
+                    backgroundColor: isPressing ? "#3b82f6" : "rgba(255, 255, 255, 0.85)",
+                    border: "1.5px solid #1e293b",
                     pointerEvents: "none",
-                    boxShadow: "0 0 6px rgba(0,0,0,0.8)",
                     transition: "transform 0.05s ease",
-                    transform: isPressing ? "scale(0.8)" : "scale(1)"
+                    transform: isPressing ? "scale(0.85)" : "scale(1)"
                   }}
                 />
               )}
@@ -289,10 +300,47 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
             </div>
           )
         ) : (
-          <div className="flex-center" style={{ flexDirection: "column", color: "var(--color-text-muted)", gap: "12px" }}>
-            <Monitor size={48} style={{ opacity: 0.3 }} />
-            <p>Screen stream is inactive</p>
-            <p style={{ fontSize: "12px" }}>Click "Start Stream" above to start base64 image mirroring</p>
+          <div className="flex-center" style={{ flexDirection: "column", color: "var(--color-text-muted)", gap: "14px", padding: "32px", textAlign: "center" }}>
+            <Monitor size={44} style={{ opacity: 0.4, color: "var(--color-accent-primary)" }} />
+            <div>
+              <h4 style={{ color: "var(--color-text-primary)", marginBottom: "4px" }}>Screen Stream Ready</h4>
+              <p style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>
+                For high-speed 60FPS fluid mirroring (especially on Wi-Fi), click <b>Launch Scrcpy Mirror</b> above.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button className="btn-primary" onClick={() => handleLaunchScrcpy()}>
+                <Zap size={14} /> Launch Scrcpy Mirror
+              </button>
+              <button className="btn-secondary" onClick={() => setScreencapActive(true)}>
+                <Play size={14} /> Start In-App Canvas Stream
+              </button>
+            </div>
+          </div>
+        )}
+
+        {scrcpyStatus && (
+          <div
+            style={{
+              position: "absolute",
+              top: "14px",
+              left: "50%",
+              transform: "translateX(-50%)",
+              padding: "8px 16px",
+              borderRadius: "var(--border-radius-sm)",
+              backgroundColor: "var(--color-surface-panel)",
+              border: "1px solid var(--color-accent-primary)",
+              color: "var(--color-text-primary)",
+              fontSize: "12px",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              zIndex: 25,
+              boxShadow: "var(--box-shadow-elevated)"
+            }}
+          >
+            <CheckCircle2 size={15} style={{ color: "var(--color-success)" }} />
+            {scrcpyStatus}
           </div>
         )}
 
@@ -304,7 +352,7 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
               left: "16px",
               right: "16px",
               padding: "12px 16px",
-              borderRadius: "var(--border-radius-md)",
+              borderRadius: "var(--border-radius-sm)",
               backgroundColor: "rgba(239, 68, 68, 0.95)",
               color: "white",
               fontSize: "13px",
@@ -336,39 +384,94 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
         <div className="card-panel" style={{ height: "100%" }}>
           <div className="panel-header">
             <span className="panel-title">
-              <Cpu size={18} />
-              Mirror Settings
+              <Cpu size={16} />
+              Mirror Controls & Tuning
             </span>
           </div>
-          <div className="panel-body" style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <span style={{ fontSize: "12px", color: "var(--color-text-muted)", fontWeight: 600 }}>NATIVE CONTROL</span>
-              <button className="btn-secondary" onClick={launchScrcpy} style={{ width: "100%" }}>
-                Launch scrcpy window
-              </button>
-            </div>
+          <div className="panel-body" style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             
+            {/* Scrcpy Native Launch Card */}
             <div
               style={{
-                backgroundColor: "rgba(85, 16, 13, 0.15)",
+                backgroundColor: "var(--color-surface-deep)",
                 border: "1px solid var(--color-border)",
-                padding: "16px",
-                borderRadius: "var(--border-radius-md)",
+                padding: "14px",
+                borderRadius: "var(--border-radius-sm)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px"
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <Zap size={16} style={{ color: "var(--color-accent-primary)" }} />
+                <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-text-primary)" }}>Native Scrcpy Window</span>
+              </div>
+              <p style={{ fontSize: "11.5px", color: "var(--color-text-secondary)", lineHeight: "1.4" }}>
+                Hardware-accelerated screen stream with near-zero latency.
+                {isWifiDevice && " Tuned automatically for Wi-Fi low latency (720p 30fps)."}
+              </p>
+              <button
+                className="btn-primary"
+                onClick={() => handleLaunchScrcpy()}
+                style={{ width: "100%", justifyContent: "center" }}
+              >
+                <Zap size={14} /> Launch Native Mirror
+              </button>
+            </div>
+
+            {/* In-App Stream Settings */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <span style={{ fontSize: "11px", color: "var(--color-text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                In-App Canvas Refresh Rate
+              </span>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  className={`btn-secondary ${pollInterval === 150 ? "active" : ""}`}
+                  style={{ flex: 1, padding: "6px 8px", fontSize: "12px" }}
+                  onClick={() => setPollInterval(150)}
+                >
+                  Fast (150ms)
+                </button>
+                <button
+                  className={`btn-secondary ${pollInterval === 250 ? "active" : ""}`}
+                  style={{ flex: 1, padding: "6px 8px", fontSize: "12px" }}
+                  onClick={() => setPollInterval(250)}
+                >
+                  Balanced (250ms)
+                </button>
+                <button
+                  className={`btn-secondary ${pollInterval === 500 ? "active" : ""}`}
+                  style={{ flex: 1, padding: "6px 8px", fontSize: "12px" }}
+                  onClick={() => setPollInterval(500)}
+                >
+                  Low Wi-Fi (500ms)
+                </button>
+              </div>
+            </div>
+            
+            {/* Usage Guide */}
+            <div
+              style={{
+                backgroundColor: "var(--color-surface-deep)",
+                border: "1px solid var(--color-border)",
+                padding: "14px",
+                borderRadius: "var(--border-radius-sm)",
                 fontSize: "12px",
                 lineHeight: "1.5",
                 color: "var(--color-text-secondary)"
               }}
             >
-              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "8px", fontWeight: "bold", color: "var(--color-text-primary)" }}>
-                <Info size={14} />
-                <span>Virtual Touchpad Guide</span>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "8px", fontWeight: "600", color: "var(--color-text-primary)" }}>
+                <Info size={14} style={{ color: "var(--color-accent-primary)" }} />
+                <span>Touchpad & Input Guide</span>
               </div>
               <ul style={{ paddingLeft: "16px", display: "flex", flexDirection: "column", gap: "6px" }}>
-                <li><b>Single Click:</b> Triggers raw touch tap at scaled target coordinate.</li>
-                <li><b>Drag & Hold:</b> Converts mouse vector swipes to ADB swipe motions.</li>
-                <li><b>Red Cursor dot:</b> Tracks pointing location overlays on screen mirroring view.</li>
+                <li><b>Click & Tap:</b> Click anywhere on mirror canvas to send direct touch tap.</li>
+                <li><b>Drag Vectors:</b> Click and drag mouse to send smooth swipe gestures.</li>
+                <li><b>Wi-Fi Speed Tip:</b> Use native Scrcpy for true 60FPS fluid video streaming over Wi-Fi.</li>
               </ul>
             </div>
+
           </div>
         </div>
       </div>

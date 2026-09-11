@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useDeviceStore } from "./store/useDeviceStore";
 import { DeviceManager } from "./components/DeviceManager";
 import { VirtualRemote } from "./components/VirtualRemote";
@@ -20,11 +21,14 @@ import {
   LayoutGrid,
   MousePointer,
   Unlock,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import "./App.css";
 
 function App() {
   const { activeTab, setActiveTab, selectedDevice, proxyEnabled, activeProxyPort, captureActive } = useDeviceStore();
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const renderActivePanel = () => {
     switch (activeTab) {
@@ -52,24 +56,33 @@ function App() {
   return (
     <div className="app-container">
       {/* Workspace Sidebar */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <div className="sidebar-header">
-          {/* Custom SVG TVDev Studio Icon */}
-          <svg
-            className="logo-icon"
-            width="28"
-            height="28"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", overflow: "hidden", flexGrow: 1 }}>
+            <svg
+              className="logo-icon"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect width="20" height="15" x="2" y="7" rx="2" ry="2" />
+              <polyline points="17 2 12 7 7 2" />
+            </svg>
+            {!isSidebarCollapsed && <span className="app-title">TVDev Studio</span>}
+          </div>
+
+          <button
+            className="sidebar-toggle-btn"
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            <rect width="20" height="15" x="2" y="7" rx="2" ry="2" />
-            <polyline points="17 2 12 7 7 2" />
-          </svg>
-          <span className="app-title">TVDev Studio</span>
+            {isSidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
         </div>
 
         <nav className="nav-menu">
@@ -77,6 +90,7 @@ function App() {
           <div
             className={`nav-item ${activeTab === "devices" ? "active" : ""}`}
             onClick={() => setActiveTab("devices")}
+            title="Devices Manager"
           >
             <Tv />
             <span>Devices Manager</span>
@@ -84,6 +98,7 @@ function App() {
           <div
             className={`nav-item ${activeTab === "workspace" ? "active" : ""}`}
             onClick={() => setActiveTab("workspace")}
+            title="Studio Workspace"
           >
             <LayoutGrid />
             <span>Studio Workspace</span>
@@ -93,6 +108,7 @@ function App() {
           <div
             className={`nav-item ${activeTab === "remote" ? "active" : ""}`}
             onClick={() => setActiveTab("remote")}
+            title="Virtual Remote"
           >
             <Keyboard />
             <span>Virtual Remote</span>
@@ -100,6 +116,7 @@ function App() {
           <div
             className={`nav-item ${activeTab === "profiles" ? "active" : ""}`}
             onClick={() => setActiveTab("profiles")}
+            title="Keyboard Profiles"
           >
             <Settings />
             <span>Keyboard Profiles</span>
@@ -107,6 +124,7 @@ function App() {
           <div
             className={`nav-item ${activeTab === "mouse" ? "active" : ""}`}
             onClick={() => setActiveTab("mouse")}
+            title="Mouse Capture"
             style={{ position: "relative" }}
           >
             <MousePointer />
@@ -120,6 +138,7 @@ function App() {
           <div
             className={`nav-item ${activeTab === "screen" ? "active" : ""}`}
             onClick={() => setActiveTab("screen")}
+            title="Screen Mirroring"
           >
             <Monitor />
             <span>Screen Mirroring</span>
@@ -129,6 +148,7 @@ function App() {
           <div
             className={`nav-item ${activeTab === "network" ? "active" : ""}`}
             onClick={() => setActiveTab("network")}
+            title="Network Inspector"
           >
             <Radio />
             <span>Network Inspector</span>
@@ -136,6 +156,7 @@ function App() {
           <div
             className={`nav-item ${activeTab === "logs" ? "active" : ""}`}
             onClick={() => setActiveTab("logs")}
+            title="Logcat Streamer"
           >
             <Terminal />
             <span>Logcat Streamer</span>
@@ -145,7 +166,7 @@ function App() {
         <div className="sidebar-footer">
           <div style={{ display: "flex", gap: "8px", alignItems: "center", fontSize: "11px", color: "var(--color-text-muted)" }}>
             <CloudLightning size={12} className="logo-icon" />
-            <span>v0.9 — Mouse KVM Ready</span>
+            {!isSidebarCollapsed && <span>v0.9 — Mouse KVM Ready</span>}
           </div>
         </div>
       </aside>

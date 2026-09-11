@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore, LogLine } from "../store/useDeviceStore";
-import { Terminal, Trash2, Filter, Download, ArrowDown } from "lucide-react";
+import { Terminal, Trash2, Filter, Download, ArrowDown, Pause, Play } from "lucide-react";
 
 export interface LogcatViewerProps {
   layoutMode?: "tab" | "workspace";
@@ -21,7 +21,14 @@ export const LogcatViewer: React.FC<LogcatViewerProps> = ({ layoutMode = "tab" }
   } = useDeviceStore();
 
   const [autoscroll, setAutoscroll] = useState(true);
+  const [isPaused, setIsPaused] = useState(false);
   const terminalRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep track of paused state inside ref for callback access
+  const isPausedRef = useRef(isPaused);
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
 
   // Bind logcat listener and trigger spawn process with batched log updates
   useEffect(() => {
@@ -42,14 +49,14 @@ export const LogcatViewer: React.FC<LogcatViewerProps> = ({ layoutMode = "tab" }
 
     // Batch updates every 150ms to prevent high-frequency state updates from freezing React
     const batchInterval = setInterval(() => {
-      if (buffer.length > 0 && active) {
+      if (buffer.length > 0 && active && !isPausedRef.current) {
         addLogLines(buffer);
         buffer = [];
       }
     }, 150);
 
     const unlistenPromise = listen<LogLine>("logcat-line", (event) => {
-      if (active) {
+      if (active && !isPausedRef.current) {
         buffer.push(event.payload);
       }
     });
@@ -64,10 +71,10 @@ export const LogcatViewer: React.FC<LogcatViewerProps> = ({ layoutMode = "tab" }
 
   // Handle Autoscrolling
   useEffect(() => {
-    if (autoscroll && terminalRef.current) {
+    if (autoscroll && !isPaused && terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
-  }, [logs, autoscroll]);
+  }, [logs, autoscroll, isPaused]);
 
   // Log level severity ranks
   const getLevelWeight = (lvl: string) => {
@@ -128,24 +135,53 @@ export const LogcatViewer: React.FC<LogcatViewerProps> = ({ layoutMode = "tab" }
     <div className="card-panel" style={{ flexGrow: 1, height: "100%", minHeight: 0 }}>
       <div className="panel-header" style={{ flexShrink: 0 }}>
         <span className="panel-title">
-          <Terminal size={18} />
-          Android Logcat Terminal Stream
+          <Terminal size={18} style={{ color: "var(--color-accent-primary)" }} />
+          Logcat Streamer
+          {isPaused ? (
+            <span className="badge badge-warning" style={{ marginLeft: "8px" }}>PAUSED</span>
+          ) : (
+            <span className="badge badge-success" style={{ marginLeft: "8px" }}>STREAMING</span>
+          )}
+          <span style={{ fontSize: "11px", color: "var(--color-text-muted)", marginLeft: "4px", fontWeight: "normal" }}>
+            ({filteredLogs.length} / {logs.length} lines)
+          </span>
         </span>
-        <div style={{ display: "flex", gap: "10px" }}>
-          <button className="btn-secondary" style={{ padding: "6px 12px" }} onClick={exportLogs}>
-            <Download size={14} /> Export
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            className={`btn-primary ${isPaused ? "" : "btn-secondary"}`}
+            style={{ padding: "6px 12px" }}
+            onClick={() => setIsPaused(!isPaused)}
+            title={isPaused ? "Resume log stream" : "Pause log stream"}
+          >
+            {isPaused ? <Play size={14} /> : <Pause size={14} />}
+            {isPaused ? "Resume Stream" : "Pause Stream"}
           </button>
-          <button className="btn-secondary" style={{ padding: "6px 12px" }} onClick={clearLogs}>
-            <Trash2 size={14} /> Clear Buffer
+
+          <button
+            className="btn-secondary"
+            style={{ padding: "6px 12px" }}
+            onClick={clearLogs}
+            title="Clear all log lines from terminal buffer"
+          >
+            <Trash2 size={14} /> Clear
+          </button>
+
+          <button
+            className="btn-secondary"
+            style={{ padding: "6px 12px" }}
+            onClick={exportLogs}
+            title="Export filtered logs to file"
+          >
+            <Download size={14} /> Export
           </button>
         </div>
       </div>
 
-      <div className="panel-body logcat-container" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minHeight: 0, padding: "16px 20px" }}>
+      <div className="panel-body logcat-container" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minHeight: 0, padding: "14px 18px" }}>
         {/* Controls Bar */}
         <div className="logcat-controls" style={{ flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <Filter size={16} style={{ color: "var(--color-text-muted)" }} />
+            <Filter size={15} style={{ color: "var(--color-text-muted)" }} />
             <select
               className="input-field"
               style={{ width: "130px", padding: "6px 10px" }}
@@ -175,7 +211,7 @@ export const LogcatViewer: React.FC<LogcatViewerProps> = ({ layoutMode = "tab" }
           <div
             className="switch-container"
             onClick={() => setAutoscroll(!autoscroll)}
-            style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}
+            style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}
           >
             <ArrowDown size={14} style={{ color: autoscroll ? "var(--color-accent-primary)" : "var(--color-text-muted)" }} />
             <span>Autoscroll</span>
@@ -189,7 +225,7 @@ export const LogcatViewer: React.FC<LogcatViewerProps> = ({ layoutMode = "tab" }
         <div className="logcat-terminal" style={{ flexGrow: 1, overflowY: "auto", minHeight: 0 }} ref={terminalRef}>
           {filteredLogs.length === 0 ? (
             <div className="flex-center" style={{ flexGrow: 1, color: "var(--color-text-muted)" }}>
-              No matching logs captured. Streaming...
+              {isPaused ? "Log stream is paused. Click 'Resume Stream' to capture incoming logs." : "No matching logs captured. Streaming..."}
             </div>
           ) : (
             filteredLogs.map((log, i) => (
