@@ -66,6 +66,8 @@ interface DeviceState {
   captureWsPort: number | null;
   capturePermissionGranted: boolean | null;
   virtualCursorPos: { x: number; y: number };
+  virtualCursorPressed: boolean;
+  captureHideSystemCursor: boolean;
   captureSensitivity: number;
   captureDragThreshold: number;
   captureWsClientCount: number;
@@ -102,6 +104,8 @@ interface DeviceState {
   setCaptureWsPort: (port: number | null) => void;
   setCapturePermissionGranted: (granted: boolean | null) => void;
   setVirtualCursorPos: (pos: { x: number; y: number }) => void;
+  setVirtualCursorPressed: (pressed: boolean) => void;
+  setCaptureHideSystemCursor: (hide: boolean) => void;
   setCaptureSensitivity: (v: number) => void;
   setCaptureDragThreshold: (v: number) => void;
   setCaptureWsClientCount: (n: number) => void;
@@ -168,6 +172,8 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   captureWsPort: null,
   capturePermissionGranted: null,
   virtualCursorPos: { x: 960, y: 540 },
+  virtualCursorPressed: false,
+  captureHideSystemCursor: false,
   captureSensitivity: 2.0,
   captureDragThreshold: 8,
   captureWsClientCount: 0,
@@ -178,9 +184,9 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   
   addLogLine: (line) =>
     set((state) => {
-      // Prevent logs list from growing infinitely (cap at 1500 logs)
+      // Prevent logs list from growing infinitely (cap at 500 logs for high UI responsiveness)
       const logs = [...state.logs, line];
-      if (logs.length > 1500) {
+      if (logs.length > 500) {
         logs.shift();
       }
       return { logs };
@@ -188,8 +194,8 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   addLogLines: (lines) =>
     set((state) => {
       let logs = [...state.logs, ...lines];
-      if (logs.length > 1500) {
-        logs = logs.slice(logs.length - 1500);
+      if (logs.length > 500) {
+        logs = logs.slice(logs.length - 500);
       }
       return { logs };
     }),
@@ -237,6 +243,8 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   setCaptureWsPort: (captureWsPort) => set({ captureWsPort }),
   setCapturePermissionGranted: (capturePermissionGranted) => set({ capturePermissionGranted }),
   setVirtualCursorPos: (virtualCursorPos) => set({ virtualCursorPos }),
+  setVirtualCursorPressed: (virtualCursorPressed) => set({ virtualCursorPressed }),
+  setCaptureHideSystemCursor: (captureHideSystemCursor) => set({ captureHideSystemCursor }),
   setCaptureSensitivity: (captureSensitivity) => set({ captureSensitivity }),
   setCaptureDragThreshold: (captureDragThreshold) => set({ captureDragThreshold }),
   setCaptureWsClientCount: (captureWsClientCount) => set({ captureWsClientCount }),

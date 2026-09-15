@@ -11,7 +11,10 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
   const {
     selectedDevice,
     screencapActive,
-    setScreencapActive
+    setScreencapActive,
+    captureActive,
+    virtualCursorPos,
+    virtualCursorPressed,
   } = useDeviceStore();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -30,6 +33,7 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
 
   const handleLaunchScrcpy = async (forceWifiMode?: boolean) => {
     if (!selectedDevice) return;
+    setScreencapActive(false); // Stop in-app polling to free ADB connection and TV GPU for scrcpy
     setScrcpyStatus("Launching scrcpy...");
     try {
       const connType = forceWifiMode ? "wifi" : selectedDevice.connection_type;
@@ -45,31 +49,23 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
     }
   };
 
-  // Poll screenshot frames using raw binary bytes (Vec<u8>)
+  // Poll screenshot frames using Base64 Data URI (get_screenshot)
   useEffect(() => {
     if (!screencapActive || !selectedDevice) {
       setHasFrame(false);
       return;
     }
     let active = true;
-    let objectUrl: string | null = null;
     
     const poll = async () => {
       if (!active) return;
       try {
-        const rawBytes = await invoke<number[]>("get_screenshot_raw", { serial: selectedDevice.serial });
-        if (active) {
-          const bytes = new Uint8Array(rawBytes);
-          const blob = new Blob([bytes], { type: "image/png" });
-          const newUrl = URL.createObjectURL(blob);
-          
+        const base64Uri = await invoke<string>("get_screenshot", { serial: selectedDevice.serial });
+        if (active && base64Uri) {
           const img = new Image();
-          img.src = newUrl;
+          img.src = base64Uri;
           img.onload = () => {
-            if (!active) {
-              URL.revokeObjectURL(newUrl);
-              return;
-            }
+            if (!active) return;
             const canvas = canvasRef.current;
             if (canvas) {
               const ctx = canvas.getContext("2d");
@@ -80,15 +76,10 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
                 setHasFrame(true);
               }
             }
-            if (objectUrl) {
-              URL.revokeObjectURL(objectUrl);
-            }
-            objectUrl = newUrl;
             setErrorMsg(null);
           };
-          
           img.onerror = () => {
-            URL.revokeObjectURL(newUrl);
+            if (active) setErrorMsg("Failed to render frame onto canvas.");
           };
         }
       } catch (err: any) {
@@ -107,9 +98,6 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
     poll();
     return () => {
       active = false;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
   }, [screencapActive, selectedDevice, pollInterval]);
 
@@ -272,8 +260,54 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
                 onMouseLeave={() => setCursorPos((c) => ({ ...c, visible: false }))}
               />
               
-              {/* Virtual Cursor dot overlay on desktop */}
-              {cursorPos.visible && (
+              {/* Visible Mouse Capture Cursor & Ripple */}
+              {captureActive ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: `${(virtualCursorPos.x / (selectedDevice?.resolution?.split("x").map(n => parseInt(n))[0] || 1920)) * 100}%`,
+                    top: `${(virtualCursorPos.y / (selectedDevice?.resolution?.split("x").map(n => parseInt(n))[1] || 1080)) * 100}%`,
+                    pointerEvents: "none",
+                    zIndex: 100,
+                    transform: "translate(-2px, -2px)",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "relative",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      transform: virtualCursorPressed ? "scale(0.85)" : "scale(1)",
+                      transition: "transform 0.06s ease",
+                      filter: "drop-shadow(0 2px 6px rgba(0,0,0,0.7))",
+                    }}
+                  >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path
+                        d="M3 2L19 12L11 13.5L7.5 20.5L3 2Z"
+                        fill={virtualCursorPressed ? "#3b82f6" : "#ffffff"}
+                        stroke="#0f172a"
+                        strokeWidth="1.6"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    {virtualCursorPressed && (
+                      <span
+                        style={{
+                          position: "absolute",
+                          width: "30px",
+                          height: "30px",
+                          borderRadius: "50%",
+                          border: "2px solid #3b82f6",
+                          backgroundColor: "rgba(59, 130, 246, 0.4)",
+                          pointerEvents: "none",
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+              ) : cursorPos.visible && (
                 <div
                   style={{
                     position: "absolute",

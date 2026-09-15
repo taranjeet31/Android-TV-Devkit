@@ -1407,3 +1407,26 @@ body {
   animation: mc-pulse 1s ease infinite;
   flex-shrink: 0;
 }
+
+/* Mouse capture visible cursor animations */
+@keyframes cursor-ripple {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+.cursor-click-ripple {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--color-accent-primary);
+  background: rgba(59, 130, 246, 0.3);
+  animation: cursor-ripple 0.3s ease-out forwards;
+  pointer-events: none;
+}

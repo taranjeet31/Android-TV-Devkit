@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useDeviceStore } from "./store/useDeviceStore";
 import { DeviceManager } from "./components/DeviceManager";
 import { VirtualRemote } from "./components/VirtualRemote";
@@ -8,6 +9,7 @@ import { NetworkInspector } from "./components/NetworkInspector";
 import { LogcatViewer } from "./components/LogcatViewer";
 import { StudioWorkspace } from "./components/StudioWorkspace";
 import { MouseCapture } from "./components/MouseCapture";
+import { ADBTerminal } from "./components/ADBTerminal";
 import {
   Tv,
   Keyboard,
@@ -23,12 +25,46 @@ import {
   Unlock,
   PanelLeftClose,
   PanelLeftOpen,
+  SquareTerminal,
 } from "lucide-react";
 import "./App.css";
 
 function App() {
-  const { activeTab, setActiveTab, selectedDevice, proxyEnabled, activeProxyPort, captureActive } = useDeviceStore();
+  const {
+    activeTab,
+    setActiveTab,
+    selectedDevice,
+    proxyEnabled,
+    activeProxyPort,
+    captureActive,
+    setVirtualCursorPos,
+    setVirtualCursorPressed,
+  } = useDeviceStore();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    let unlistenPos: (() => void) | undefined;
+    let unlistenPress: (() => void) | undefined;
+
+    listen<[number, number]>("virtual-cursor-moved", (event) => {
+      if (Array.isArray(event.payload) && event.payload.length === 2) {
+        setVirtualCursorPos({ x: event.payload[0], y: event.payload[1] });
+      }
+    }).then((fn) => {
+      unlistenPos = fn;
+    });
+
+    listen<boolean>("virtual-cursor-pressed", (event) => {
+      setVirtualCursorPressed(!!event.payload);
+    }).then((fn) => {
+      unlistenPress = fn;
+    });
+
+    return () => {
+      unlistenPos?.();
+      unlistenPress?.();
+    };
+  }, []);
 
   const renderActivePanel = () => {
     switch (activeTab) {
@@ -46,6 +82,8 @@ function App() {
         return <NetworkInspector />;
       case "logs":
         return <LogcatViewer />;
+      case "terminal":
+        return <ADBTerminal />;
       case "mouse":
         return <MouseCapture />;
       default:
@@ -160,6 +198,14 @@ function App() {
           >
             <Terminal />
             <span>Logcat Streamer</span>
+          </div>
+          <div
+            className={`nav-item ${activeTab === "terminal" ? "active" : ""}`}
+            onClick={() => setActiveTab("terminal")}
+            title="ADB Terminal Shell"
+          >
+            <SquareTerminal />
+            <span>ADB Terminal</span>
           </div>
         </nav>
 

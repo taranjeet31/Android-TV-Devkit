@@ -61,6 +61,7 @@ interface CaptureConfig {
   adb_serial: string | null;
   ws_port: number;
   session_token: string;
+  hide_system_cursor: boolean;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -82,6 +83,8 @@ export const MouseCapture: React.FC = () => {
     captureActive,
     capturePermissionGranted,
     virtualCursorPos,
+    virtualCursorPressed,
+    captureHideSystemCursor,
     captureSensitivity,
     captureDragThreshold,
     captureWsClientCount,
@@ -90,6 +93,7 @@ export const MouseCapture: React.FC = () => {
     setCaptureWsPort,
     setCapturePermissionGranted,
     setVirtualCursorPos,
+    setCaptureHideSystemCursor,
     setCaptureSensitivity,
     setCaptureDragThreshold,
     setCaptureWsClientCount,
@@ -215,6 +219,7 @@ export const MouseCapture: React.FC = () => {
       adb_serial: mode === "android" && selectedDevice ? selectedDevice.serial : null,
       ws_port: wsPort,
       session_token: sessionToken,
+      hide_system_cursor: captureHideSystemCursor,
     };
     try {
       const port = await startSession(config);
@@ -450,6 +455,21 @@ export const MouseCapture: React.FC = () => {
                 <span>24px</span>
               </div>
             </div>
+            <div className="mc-setting" style={{ justifyContent: "center" }}>
+              <label className="mc-label" style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: "8px" }}>
+                <input
+                  type="checkbox"
+                  checked={captureHideSystemCursor}
+                  disabled={sessionStarted}
+                  onChange={(e) => setCaptureHideSystemCursor(e.target.checked)}
+                  style={{ width: "16px", height: "16px", accentColor: "var(--color-accent-primary)" }}
+                />
+                <span>Hide macOS System Cursor</span>
+              </label>
+              <p style={{ fontSize: "11px", color: "var(--color-text-muted)", marginTop: "4px" }}>
+                Unchecked: leaves your Mac desktop pointer visible while capturing mouse.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -463,12 +483,34 @@ export const MouseCapture: React.FC = () => {
             <div className="mc-cursor-display">
               <div className="mc-cursor-screen">
                 <div
-                  className="mc-cursor-dot"
+                  className="mc-cursor-pointer-wrap"
                   style={{
+                    position: "absolute",
                     left: `${(virtualCursorPos.x / resW) * 100}%`,
                     top: `${(virtualCursorPos.y / resH) * 100}%`,
+                    transform: "translate(-2px, -2px)",
+                    pointerEvents: "none",
+                    zIndex: 10,
                   }}
-                />
+                >
+                  <div
+                    style={{
+                      transform: virtualCursorPressed ? "scale(0.85)" : "scale(1)",
+                      transition: "transform 0.05s ease",
+                      filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.6))",
+                    }}
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M3 2L19 12L11 13.5L7.5 20.5L3 2Z"
+                        fill={virtualCursorPressed ? "#3b82f6" : "#ffffff"}
+                        stroke="#0f172a"
+                        strokeWidth="1.6"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </div>
+                </div>
                 <div className="mc-screen-label">
                   {resW}×{resH}
                 </div>
@@ -476,6 +518,7 @@ export const MouseCapture: React.FC = () => {
               <div className="mc-cursor-coords">
                 <span>X: <strong>{virtualCursorPos.x}</strong></span>
                 <span>Y: <strong>{virtualCursorPos.y}</strong></span>
+                <span>Status: <strong style={{ color: virtualCursorPressed ? "var(--color-accent-primary)" : "var(--color-text-secondary)" }}>{virtualCursorPressed ? "CLICK / DRAG" : "MOVING"}</strong></span>
               </div>
             </div>
           </div>

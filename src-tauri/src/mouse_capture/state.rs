@@ -66,6 +66,9 @@ pub struct CaptureConfig {
     pub ws_port: u16,
     /// Session auth token
     pub session_token: String,
+    /// Hide macOS system cursor while capturing (default: false, visible)
+    #[serde(default)]
+    pub hide_system_cursor: bool,
 }
 
 impl Default for CaptureConfig {
@@ -79,6 +82,7 @@ impl Default for CaptureConfig {
             adb_serial: None,
             ws_port: 9877,
             session_token: String::new(),
+            hide_system_cursor: false,
         }
     }
 }
@@ -169,8 +173,10 @@ fn run_state_machine(
     // WebSocket handle
     let ws_handle = managed.ws_handle.lock().unwrap().clone();
 
-    // ADB serial
     let adb_serial = config.adb_serial.clone();
+    let mut adb_session: Option<crate::adb::AdbShellSession> = None;
+    let mut last_sent_vx: i32 = -1;
+    let mut last_sent_vy: i32 = -1;
 
     let mut last_tick = Instant::now();
     let mut current_state = CaptureState::Idle;
@@ -190,11 +196,15 @@ fn run_state_machine(
                             Ok((handle, rx)) => {
                                 tap_handle = Some(handle);
                                 tap_rx = Some(rx);
-                                event_tap::hide_cursor();
+                                if config.hide_system_cursor {
+                                    event_tap::hide_cursor();
+                                }
                                 current_state = CaptureState::Captured;
                                 // Reset virtual cursor to center
                                 vx = screen_w / 2;
                                 vy = screen_h / 2;
+                                *managed.virtual_cursor.lock().unwrap() = (vx, vy);
+                                let _ = app.emit("virtual-cursor-moved", (vx, vy));
                                 // Broadcast cursor_start
                                 if let Some(ws) = &ws_handle {
                                     let _ = ws.broadcast(&CursorMessage::CursorStart {
@@ -205,6 +215,18 @@ fn run_state_machine(
                                 }
                                 set_state(&managed, CaptureState::Captured);
                                 let _ = app.emit("capture-state-changed", CaptureState::Captured);
+                                if let Some(ref serial) = adb_serial {
+                                    adb_session = crate::adb::AdbShellSession::spawn(serial).ok();
+                                    if let Some(ref mut session) = adb_session {
+                                        let _ = session.move_mouse(vx, vy);
+                                        last_sent_vx = vx;
+                                        last_sent_vy = vy;
+                                    }
+                                    let s = serial.clone();
+                                    std::thread::spawn(move || {
+                                        let _ = crate::adb::enable_on_screen_touches(&s, true);
+                                    });
+                                }
                                 eprintln!("[capture] → CAPTURED");
                             }
                             Err(e) => {
@@ -214,6 +236,7 @@ fn run_state_machine(
                         }
                     } else {
                         // → IDLE
+                        adb_session = None;
                         do_release(&app, &managed, &mut tap_handle, &ws_handle);
                         current_state = CaptureState::Idle;
                         eprintln!("[capture] → IDLE (hotkey)");
@@ -234,8 +257,9 @@ fn run_state_machine(
                         acc_dy += sdy;
                         vx = (vx + sdx).clamp(0, screen_w - 1);
                         vy = (vy + sdy).clamp(0, screen_h - 1);
-                        // Update shared cursor position
+                        // Update shared cursor position & emit event
                         *managed.virtual_cursor.lock().unwrap() = (vx, vy);
+                        let _ = app.emit("virtual-cursor-moved", (vx, vy));
                     }
                 }
                 Ok(CaptureEvent::ButtonDown(btn)) => {
@@ -243,6 +267,7 @@ fn run_state_machine(
                         down_pos = Some((vx, vy));
                         _btn_down = Some(btn);
                         let button = btn_to_enum(btn);
+                        let _ = app.emit("virtual-cursor-pressed", true);
                         if let Some(ws) = &ws_handle {
                             let _ = ws.broadcast(&CursorMessage::CursorDown { button });
                         }
@@ -251,6 +276,7 @@ fn run_state_machine(
                 Ok(CaptureEvent::ButtonUp(btn)) => {
                     if current_state == CaptureState::Captured {
                         let button = btn_to_enum(btn);
+                        let _ = app.emit("virtual-cursor-pressed", false);
                         if let Some(ws) = &ws_handle {
                             let _ = ws.broadcast(&CursorMessage::CursorUp { button });
                         }
@@ -316,35 +342,36 @@ fn run_state_machine(
                                     vx = (vx + sdx).clamp(0, screen_w - 1);
                                     vy = (vy + sdy).clamp(0, screen_h - 1);
                                     *managed.virtual_cursor.lock().unwrap() = (vx, vy);
+                                    let _ = app.emit("virtual-cursor-moved", (vx, vy));
                                 }
                                 MouseEventKind::ButtonDown(btn) => {
                                     down_pos = Some((vx, vy));
                                     _btn_down = Some(btn);
                                     let button = btn_to_enum(btn);
+                                    let _ = app.emit("virtual-cursor-pressed", true);
                                     if let Some(ws) = &ws_handle {
                                         let _ = ws.broadcast(&CursorMessage::CursorDown { button });
                                     }
                                 }
                                 MouseEventKind::ButtonUp(btn) => {
                                     let button = btn_to_enum(btn);
+                                    let _ = app.emit("virtual-cursor-pressed", false);
                                     if let Some(ws) = &ws_handle {
                                         let _ = ws.broadcast(&CursorMessage::CursorUp { button });
                                     }
-                                    if let (Some((dx_pos, dy_pos)), Some(adb_s)) = (down_pos.take(), &adb_serial) {
+                                    if let Some((dx_pos, dy_pos)) = down_pos.take() {
                                         let moved = ((vx - dx_pos).abs()).max((vy - dy_pos).abs());
-                                        if moved < drag_threshold {
-                                            let serial = adb_s.clone();
-                                            let tx = vx as u32;
-                                            let ty = vy as u32;
+                                        if let Some(ref mut session) = adb_session {
+                                            if moved < drag_threshold {
+                                                let _ = session.tap_mouse(vx, vy);
+                                            } else {
+                                                let _ = session.swipe_mouse(dx_pos, dy_pos, vx, vy, 150);
+                                            }
+                                        } else if let Some(ref serial) = adb_serial {
+                                            let s = serial.clone();
+                                            let (tx, ty) = (vx as u32, vy as u32);
                                             std::thread::spawn(move || {
-                                                let _ = crate::adb::send_click(&serial, tx, ty);
-                                            });
-                                        } else {
-                                            let serial = adb_s.clone();
-                                            let (sx, sy) = (dx_pos as u32, dy_pos as u32);
-                                            let (ex, ey) = (vx as u32, vy as u32);
-                                            std::thread::spawn(move || {
-                                                let _ = crate::adb::send_swipe(&serial, sx, sy, ex, ey, 150);
+                                                let _ = crate::adb::send_click(&s, tx, ty);
                                             });
                                         }
                                     }
@@ -359,6 +386,15 @@ fn run_state_machine(
                         }
                         Err(_) => break,
                     }
+                }
+            }
+
+            // Stream continuous mouse movement to Android TV via ADB shell stdin pipe
+            if vx != last_sent_vx || vy != last_sent_vy {
+                if let Some(ref mut session) = adb_session {
+                    let _ = session.move_mouse(vx, vy);
+                    last_sent_vx = vx;
+                    last_sent_vy = vy;
                 }
             }
         }
@@ -402,6 +438,14 @@ fn do_release(
     // Broadcast cursor_end to TV clients
     if let Some(ws) = ws_handle {
         let _ = ws.broadcast(&CursorMessage::CursorEnd);
+    }
+    if let Ok(config) = managed.config.lock() {
+        if let Some(ref serial) = config.adb_serial {
+            let s = serial.clone();
+            std::thread::spawn(move || {
+                let _ = crate::adb::enable_on_screen_touches(&s, false);
+            });
+        }
     }
     set_state(managed, CaptureState::Idle);
     let _ = app.emit("capture-state-changed", CaptureState::Idle);

@@ -60,19 +60,20 @@
     /* ── Virtual cursor ──────────────────────────────────────────────── */
     #virtual-cursor {
       position: fixed;
-      width: 24px; height: 24px;
+      width: 36px; height: 36px;
       pointer-events: none;
       z-index: 9999;
-      transform: translate(-4px, -4px); /* hotspot at top-left corner of arrow */
-      transition: opacity 0.2s ease;
+      transform: translate(-3px, -3px); /* hotspot at top-left corner of arrow */
+      transition: opacity 0.2s ease, transform 0.05s ease;
       opacity: 0;
     }
 
     #virtual-cursor.visible { opacity: 1; }
+    #virtual-cursor.pressed { transform: translate(-3px, -3px) scale(0.85); }
 
-    /* SVG arrow cursor */
+    /* SVG arrow cursor with high-contrast dual stroke & glow */
     #virtual-cursor svg {
-      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+      filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.85)) drop-shadow(0 0 4px rgba(59, 130, 246, 0.7));
     }
 
     /* Click ripple */
@@ -80,7 +81,8 @@
       position: fixed;
       width: 0; height: 0;
       border-radius: 50%;
-      background: rgba(99, 179, 237, 0.45);
+      background: rgba(59, 130, 246, 0.55);
+      border: 2px solid #60a5fa;
       pointer-events: none;
       z-index: 9998;
       transform: translate(-50%, -50%);
@@ -88,8 +90,8 @@
     }
 
     @keyframes ripple-expand {
-      0%   { width: 0; height: 0; opacity: 0.7; }
-      100% { width: 60px; height: 60px; opacity: 0; }
+      0%   { width: 0; height: 0; opacity: 0.9; }
+      100% { width: 80px; height: 80px; opacity: 0; }
     }
 
     #click-ripple.active {
@@ -108,8 +110,15 @@
 
   <!-- Virtual cursor arrow -->
   <div id="virtual-cursor">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M4 2L20 12L12 13.5L8.5 20L4 2Z" fill="white" stroke="#333" stroke-width="1.5" stroke-linejoin="round"/>
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M3 2L19 12L11 13.5L7.5 20.5L3 2Z" fill="#ffffff" stroke="#1e293b" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M3 2L19 12L11 13.5L7.5 20.5L3 2Z" fill="url(#gradient)" opacity="0.3"/>
+      <defs>
+        <linearGradient id="gradient" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#3b82f6"/>
+          <stop offset="1" stop-color="#1d4ed8"/>
+        </linearGradient>
+      </defs>
     </svg>
   </div>
 
@@ -190,6 +199,7 @@
 
     function handleButtonDown(button) {
       if (button !== 'left') return;
+      cursor.classList.add('pressed');
       pointerDownEl = dispatchPointerAt(vx, vy, 'pointerdown', true);
       pointerDownX  = vx;
       pointerDownY  = vy;
@@ -197,6 +207,7 @@
 
     function handleButtonUp(button) {
       if (button !== 'left') return;
+      cursor.classList.remove('pressed');
       dispatchPointerAt(vx, vy, 'pointerup', true);
 
       const dx = Math.abs(vx - pointerDownX);

@@ -79,6 +79,11 @@ fn get_screenshot(serial: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn execute_adb_command(serial: String, command: String) -> Result<String, String> {
+    adb::execute_adb_command(&serial, &command).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_screenshot_raw(serial: String) -> Result<Vec<u8>, String> {
     adb::capture_screenshot_raw(&serial).map_err(|e| e.to_string())
 }
@@ -268,6 +273,7 @@ pub fn run() {
             inject_swipe,
             get_screenshot,
             get_screenshot_raw,
+            execute_adb_command,
             launch_scrcpy,
             // Debug
             debug::start_logcat,

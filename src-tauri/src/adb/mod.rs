@@ -1,6 +1,7 @@
 use serde::{Serialize, Deserialize};
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Child, ChildStdin, Stdio};
 use std::str;
 use anyhow::{Result, anyhow};
 
@@ -220,22 +221,82 @@ pub fn reverse_port(serial: &str, device_port: u16, host_port: u16) -> Result<St
 }
 
 
-/// Captures a screenshot from the device and returns it as a Base64-encoded PNG string
+/// Captures a screenshot from the device and returns it as a Base64 data URI string ("data:image/png;base64,...")
 pub fn capture_screenshot(serial: &str) -> Result<String> {
-    // adb exec-out bypasses newline translation (ideal for binary files)
     let adb = find_adb()?;
-    let output = Command::new(&adb)
+    use base64::prelude::*;
+
+    // Try exec-out first
+    if let Ok(output) = Command::new(&adb)
         .args(&["-s", serial, "exec-out", "screencap", "-p"])
+        .output() 
+    {
+        if output.status.success() && !output.stdout.is_empty() {
+            let encoded = BASE64_STANDARD.encode(&output.stdout);
+            return Ok(format!("data:image/png;base64,{}", encoded));
+        }
+    }
+
+    // Fallback to shell screencap
+    let output = Command::new(&adb)
+        .args(&["-s", serial, "shell", "screencap", "-p"])
         .output()?;
-        
+
     if output.status.success() && !output.stdout.is_empty() {
-        use base64::prelude::*;
-        Ok(BASE64_STANDARD.encode(&output.stdout))
+        let encoded = BASE64_STANDARD.encode(&output.stdout);
+        Ok(format!("data:image/png;base64,{}", encoded))
     } else {
         let err = str::from_utf8(&output.stderr).unwrap_or("Failed to execute screencap").trim().to_string();
         Err(anyhow!("Screenshot capture failed: {}", err))
     }
 }
+
+/// Executes an arbitrary ADB command or shell command on the specified device
+pub fn execute_adb_command(serial: &str, raw_cmd: &str) -> Result<String> {
+    let adb = find_adb()?;
+    let trimmed = raw_cmd.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+
+    let clean_cmd = if trimmed.starts_with("adb ") {
+        &trimmed[4..]
+    } else {
+        trimmed
+    };
+
+    let mut args = vec!["-s", serial];
+    let split_args: Vec<&str> = clean_cmd.split_whitespace().collect();
+
+    let final_args = if split_args.len() >= 2 && split_args[0] == "-s" {
+        &split_args[2..]
+    } else {
+        &split_args[..]
+    };
+
+    args.extend_from_slice(final_args);
+
+    let output = Command::new(&adb)
+        .args(&args)
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        if stdout.is_empty() && !stderr.is_empty() {
+            Ok(stderr)
+        } else if stdout.is_empty() {
+            Ok("[Command executed successfully with no output]".to_string())
+        } else {
+            Ok(stdout)
+        }
+    } else {
+        let err_msg = if !stderr.is_empty() { stderr } else { stdout };
+        Err(anyhow!("Command failed: {}", err_msg.trim()))
+    }
+}
+
 
 /// Captures a screenshot from the device and returns it as raw PNG bytes
 pub fn capture_screenshot_raw(serial: &str) -> Result<Vec<u8>> {
@@ -321,6 +382,7 @@ pub fn launch_scrcpy(
         fps.to_string(),
         "--stay-awake".to_string(),
         "--no-audio".to_string(), // Disables audio capture to prevent Android TV permission denied errors
+        "--video-codec=h264".to_string(), // Ensures compatibility with TV hardware H264 decoders
     ];
 
     if is_wifi {
@@ -349,6 +411,69 @@ pub fn launch_scrcpy(
             args.iter().find(|a| a.ends_with('M')).unwrap_or(&"2M".to_string())
         )),
         Err(e) => Err(anyhow!("Failed to spawn scrcpy: {}", e)),
+    }
+}
+
+/// Enables or disables system visual touches / cursor pointer feedback on Android TV
+pub fn enable_on_screen_touches(serial: &str, enable: bool) -> Result<()> {
+    let val = if enable { "1" } else { "0" };
+    let _ = run_adb_cmd(&["-s", serial, "shell", "settings", "put", "system", "show_touches", val])?;
+    Ok(())
+}
+
+/// A persistent interactive ADB shell session for ultra-fast, low-latency mouse pointer streaming.
+pub struct AdbShellSession {
+    child: Child,
+    stdin: ChildStdin,
+}
+
+impl AdbShellSession {
+    /// Spawn a persistent `adb shell` process with piped stdin
+    pub fn spawn(serial: &str) -> Result<Self> {
+        let adb = find_adb()?;
+        let mut child = Command::new(&adb)
+            .args(&["-s", serial, "shell"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open stdin for ADB shell session"))?;
+
+        Ok(Self { child, stdin })
+    }
+
+    /// Send a raw shell command string into the running shell process
+    pub fn send_command(&mut self, cmd: &str) -> Result<()> {
+        writeln!(self.stdin, "{}", cmd)?;
+        self.stdin.flush()?;
+        Ok(())
+    }
+
+    /// Dispatch real-time mouse movement event to Android TV OS
+    pub fn move_mouse(&mut self, x: i32, y: i32) -> Result<()> {
+        self.send_command(&format!("input mouse motionevent MOVE {} {}", x, y))
+    }
+
+    /// Dispatch tap click event to Android TV OS
+    pub fn tap_mouse(&mut self, x: i32, y: i32) -> Result<()> {
+        self.send_command(&format!("input mouse tap {} {}", x, y))
+    }
+
+    /// Dispatch swipe event to Android TV OS
+    pub fn swipe_mouse(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u32) -> Result<()> {
+        self.send_command(&format!("input mouse swipe {} {} {} {} {}", x1, y1, x2, y2, duration_ms))
+    }
+}
+
+impl Drop for AdbShellSession {
+    fn drop(&mut self) {
+        let _ = writeln!(self.stdin, "exit");
+        let _ = self.stdin.flush();
+        let _ = self.child.kill();
     }
 }
 
