@@ -29,6 +29,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 anyhow = "1.0"
 base64 = "0.22"
 dirs = "5"
+rfd = "0.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.23" }

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useDeviceStore } from "../store/useDeviceStore";
+import { useCursorPosition } from "../hooks/useCursorPosition";
 import { Monitor, Play, Square, Info, ShieldAlert, Cpu, Wifi, Zap, CheckCircle2 } from "lucide-react";
 
 export interface ScreenMirrorProps {
@@ -13,9 +14,10 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
     screencapActive,
     setScreencapActive,
     captureActive,
-    virtualCursorPos,
     virtualCursorPressed,
   } = useDeviceStore();
+
+  const { cursorX, cursorY, isClicking } = useCursorPosition();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -260,53 +262,12 @@ export const ScreenMirror: React.FC<ScreenMirrorProps> = ({ layoutMode = "tab" }
                 onMouseLeave={() => setCursorPos((c) => ({ ...c, visible: false }))}
               />
               
-              {/* Visible Mouse Capture Cursor & Ripple */}
+              {/* Tier 1 Virtual Cursor Overlay */}
               {captureActive ? (
                 <div
-                  style={{
-                    position: "absolute",
-                    left: `${(virtualCursorPos.x / (selectedDevice?.resolution?.split("x").map(n => parseInt(n))[0] || 1920)) * 100}%`,
-                    top: `${(virtualCursorPos.y / (selectedDevice?.resolution?.split("x").map(n => parseInt(n))[1] || 1080)) * 100}%`,
-                    pointerEvents: "none",
-                    zIndex: 100,
-                    transform: "translate(-2px, -2px)",
-                  }}
-                >
-                  <div
-                    style={{
-                      position: "relative",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      transform: virtualCursorPressed ? "scale(0.85)" : "scale(1)",
-                      transition: "transform 0.06s ease",
-                      filter: "drop-shadow(0 2px 6px rgba(0,0,0,0.7))",
-                    }}
-                  >
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path
-                        d="M3 2L19 12L11 13.5L7.5 20.5L3 2Z"
-                        fill={virtualCursorPressed ? "#3b82f6" : "#ffffff"}
-                        stroke="#0f172a"
-                        strokeWidth="1.6"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                    {virtualCursorPressed && (
-                      <span
-                        style={{
-                          position: "absolute",
-                          width: "30px",
-                          height: "30px",
-                          borderRadius: "50%",
-                          border: "2px solid #3b82f6",
-                          backgroundColor: "rgba(59, 130, 246, 0.4)",
-                          pointerEvents: "none",
-                        }}
-                      />
-                    )}
-                  </div>
-                </div>
+                  className={`virtual-cursor ${isClicking || virtualCursorPressed ? 'clicking' : ''}`}
+                  style={{ left: `${cursorX * 100}%`, top: `${cursorY * 100}%` }}
+                />
               ) : cursorPos.visible && (
                 <div
                   style={{

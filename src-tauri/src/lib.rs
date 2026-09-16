@@ -4,7 +4,7 @@ mod input;
 mod mouse_capture;
 mod network;
 
-use adb::DeviceInfo;
+use adb::{DeviceInfo, AppInfo};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -141,6 +141,47 @@ fn toggle_pointer_location(serial: String, enabled: bool) -> Result<(), String> 
     }
 }
 
+// ─── App Launcher commands ────────────────────────────────────────────────────
+
+#[tauri::command]
+fn list_applications(serial: String, include_system: Option<bool>) -> Result<Vec<AppInfo>, String> {
+    adb::list_applications(&serial, include_system.unwrap_or(false)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn launch_app(serial: String, package_name: String) -> Result<String, String> {
+    adb::launch_app(&serial, &package_name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn force_stop_app(serial: String, package_name: String) -> Result<String, String> {
+    adb::force_stop_app(&serial, &package_name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_app_data(serial: String, package_name: String) -> Result<String, String> {
+    adb::clear_app_data(&serial, &package_name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn uninstall_app(serial: String, package_name: String) -> Result<String, String> {
+    adb::uninstall_app(&serial, &package_name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn install_app_file(serial: String, file_path: String) -> Result<String, String> {
+    adb::install_app_file(&serial, &file_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn pick_apk_file() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .add_filter("Android App Packages (.apk, .apks, .xapk, .aab)", &["apk", "apks", "xapk", "aab"])
+        .pick_file();
+
+    Ok(file.map(|p| p.to_string_lossy().to_string()))
+}
+
 // ─── Mouse Capture commands ───────────────────────────────────────────────────
 
 /// Check if this process has Accessibility permission (required for CGEventTap).
@@ -238,6 +279,23 @@ fn get_ws_client_count(managed: tauri::State<'_, Arc<CaptureManagerState>>) -> u
     }
 }
 
+/// Auto-installs and grants permission for companion TV cursor overlay service on Android TV
+#[tauri::command]
+async fn install_cursor_overlay(
+    app: tauri::AppHandle,
+    device_id: String,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let apk_path = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("resources/tv-cursor-overlay.apk");
+    let apk_str = apk_path.to_str().ok_or("Invalid APK path")?;
+    adb::install_cursor_overlay(&device_id, apk_str).map_err(|e| e.to_string())
+}
+
+
 // ─── App entry point ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -291,6 +349,14 @@ pub fn run() {
             inject_text,
             toggle_show_touches,
             toggle_pointer_location,
+            // App launcher
+            list_applications,
+            launch_app,
+            force_stop_app,
+            clear_app_data,
+            uninstall_app,
+            install_app_file,
+            pick_apk_file,
             // Mouse capture
             check_accessibility_permission,
             open_accessibility_settings,
@@ -301,6 +367,7 @@ pub fn run() {
             get_virtual_cursor_pos,
             stop_mouse_capture_session,
             get_ws_client_count,
+            install_cursor_overlay,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

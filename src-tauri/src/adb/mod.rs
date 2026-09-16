@@ -477,4 +477,305 @@ impl Drop for AdbShellSession {
     }
 }
 
+/// Auto-installs and launches the companion TV cursor overlay service on Android TV
+pub fn install_cursor_overlay(serial: &str, apk_path: &str) -> Result<()> {
+    let pkg_name = "com.tvdevstudio.overlay";
+    let _ = run_adb_cmd(&["-s", serial, "install", "-r", apk_path])?;
+    let _ = run_adb_cmd(&["-s", serial, "shell", "appops", "set", pkg_name, "SYSTEM_ALERT_WINDOW", "allow"])?;
+    let _ = run_adb_cmd(&["-s", serial, "shell", "am", "start-foreground-service", "-n", &format!("{}/.OverlayService", pkg_name)]);
+    Ok(())
+}
+
+// ─── App Launcher & Manager ───────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AppInfo {
+    pub package_name: String,
+    pub label: String,
+    pub is_system: bool,
+    pub installed_path: String,
+}
+
+/// Helper function to extract a clean display label from a package name
+fn format_package_label(package_name: &str) -> String {
+    let known_apps = [
+        ("com.netflix.ninja", "Netflix"),
+        ("com.google.android.youtube.tv", "YouTube TV"),
+        ("com.google.android.youtube.tvunplugged", "YouTube TV (Live)"),
+        ("com.google.android.katniss", "Google Assistant"),
+        ("com.amazon.amazonvideo.livingroom", "Prime Video"),
+        ("com.spotify.tv.web", "Spotify TV"),
+        ("com.disney.disneyplus", "Disney+"),
+        ("com.hbo.hbonow", "Max"),
+        ("com.apple.atve.androidtv.appletv", "Apple TV"),
+        ("com.plexapp.android", "Plex"),
+        ("org.xbmc.kodi", "Kodi"),
+        ("com.vlcforandroid", "VLC"),
+        ("com.google.android.tv.homescreen", "Android TV Home"),
+        ("com.google.android.apps.tv.launcherx", "Google TV Home"),
+        ("com.android.vending", "Google Play Store"),
+        ("com.android.settings", "Settings"),
+        ("com.google.android.inputmethod.latin", "Gboard"),
+    ];
+
+    for (pkg, name) in known_apps {
+        if package_name == pkg {
+            return name.to_string();
+        }
+    }
+
+    let last_part = package_name.split('.').last().unwrap_or(package_name);
+    let words: Vec<String> = last_part
+        .split(|c| c == '_' || c == '-')
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect();
+
+    let formatted = words.join(" ");
+    if formatted.trim().is_empty() {
+        package_name.to_string()
+    } else {
+        formatted
+    }
+}
+
+/// Lists installed applications on the target ADB device
+pub fn list_applications(serial: &str, include_system: bool) -> Result<Vec<AppInfo>> {
+    let args = if include_system {
+        vec!["-s", serial, "shell", "pm", "list", "packages", "-f"]
+    } else {
+        vec!["-s", serial, "shell", "pm", "list", "packages", "-f", "-3"]
+    };
+
+    let raw_output = run_adb_cmd(&args)?;
+    let mut apps = Vec::new();
+
+    for line in raw_output.lines() {
+        let line = line.trim();
+        if line.is_empty() || !line.starts_with("package:") {
+            continue;
+        }
+
+        let content = &line["package:".len()..];
+        if let Some((path, pkg)) = content.rsplit_once('=') {
+            let package_name = pkg.trim().to_string();
+            let installed_path = path.trim().to_string();
+            let is_system = installed_path.starts_with("/system")
+                || installed_path.starts_with("/vendor")
+                || installed_path.starts_with("/product")
+                || installed_path.starts_with("/apex");
+
+            let label = format_package_label(&package_name);
+
+            apps.push(AppInfo {
+                package_name,
+                label,
+                is_system,
+                installed_path,
+            });
+        }
+    }
+
+    apps.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    Ok(apps)
+}
+
+/// Launches an application on the device using monkey / leanback launcher intent
+pub fn launch_app(serial: &str, package_name: &str) -> Result<String> {
+    let leanback_res = run_adb_cmd(&[
+        "-s", serial, "shell", "monkey", "-p", package_name,
+        "-c", "android.intent.category.LEANBACK_LAUNCHER", "1"
+    ]);
+
+    if let Ok(ref out) = leanback_res {
+        if out.contains("Events injected: 1") {
+            return Ok(format!("Launched {} via Leanback Launcher", package_name));
+        }
+    }
+
+    let standard_res = run_adb_cmd(&[
+        "-s", serial, "shell", "monkey", "-p", package_name,
+        "-c", "android.intent.category.LAUNCHER", "1"
+    ]);
+
+    if let Ok(ref out) = standard_res {
+        if out.contains("Events injected: 1") {
+            return Ok(format!("Launched {} via Standard Launcher", package_name));
+        }
+    }
+
+    let monkey_fallback = run_adb_cmd(&[
+        "-s", serial, "shell", "monkey", "-p", package_name, "1"
+    ]);
+
+    match monkey_fallback {
+        Ok(out) => Ok(format!("Launched {}: {}", package_name, out)),
+        Err(e) => Err(anyhow!("Failed to launch app {}: {}", package_name, e)),
+    }
+}
+
+/// Force stops an application
+pub fn force_stop_app(serial: &str, package_name: &str) -> Result<String> {
+    run_adb_cmd(&["-s", serial, "shell", "am", "force-stop", package_name])?;
+    Ok(format!("Force stopped {}", package_name))
+}
+
+/// Clears user data for an application
+pub fn clear_app_data(serial: &str, package_name: &str) -> Result<String> {
+    let out = run_adb_cmd(&["-s", serial, "shell", "pm", "clear", package_name])?;
+    Ok(format!("Cleared app data for {}: {}", package_name, out))
+}
+
+/// Uninstalls an application
+pub fn uninstall_app(serial: &str, package_name: &str) -> Result<String> {
+    let out = run_adb_cmd(&["-s", serial, "shell", "pm", "uninstall", package_name])?;
+    Ok(format!("Uninstalled {}: {}", package_name, out))
+}
+
+/// Installs an application file (.apk, .apks, .xapk, .aab) onto the device via ADB
+pub fn install_app_file(serial: &str, file_path: &str) -> Result<String> {
+    let path = PathBuf::from(file_path);
+    if !path.exists() {
+        return Err(anyhow!("File does not exist: {}", file_path));
+    }
+
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_path.to_string());
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    match ext.as_str() {
+        "apk" => {
+            let out = run_adb_cmd(&["-s", serial, "install", "-r", "-g", file_path])?;
+            if out.contains("Failure") {
+                Err(anyhow!("ADB install failed: {}", out))
+            } else {
+                Ok(format!("Successfully installed {}", file_name))
+            }
+        }
+        "xapk" | "apks" | "zip" => {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let temp_dir = std::env::temp_dir().join(format!("tv_app_bundle_{}", timestamp));
+            std::fs::create_dir_all(&temp_dir)?;
+
+            let unzip_res = Command::new("unzip")
+                .args(&["-o", "-q", file_path, "-d", &temp_dir.to_string_lossy()])
+                .output();
+
+            if unzip_res.is_err() || !unzip_res.as_ref().unwrap().status.success() {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Err(anyhow!("Failed to unzip split APK bundle {}", file_name));
+            }
+
+            let mut apk_paths = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_file() && entry_path.extension().map_or(false, |e| e.to_ascii_lowercase() == "apk") {
+                        apk_paths.push(entry_path.to_string_lossy().to_string());
+                    }
+                }
+            }
+
+            if apk_paths.is_empty() {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Err(anyhow!("No valid .apk files found inside split bundle {}", file_name));
+            }
+
+            let mut args = vec!["-s", serial, "install-multiple", "-r", "-g"];
+            for apk in &apk_paths {
+                args.push(apk.as_str());
+            }
+
+            let res = run_adb_cmd(&args);
+            let _ = std::fs::remove_dir_all(&temp_dir);
+
+            match res {
+                Ok(out) if !out.contains("Failure") => Ok(format!("Successfully installed split app bundle {}", file_name)),
+                Ok(out) => Err(anyhow!("Split APK install failed: {}", out)),
+                Err(e) => Err(anyhow!("Failed to install split APK bundle: {}", e)),
+            }
+        }
+        "aab" => {
+            let bundletool_check = Command::new("which").arg("bundletool").output();
+            let has_bundletool = match bundletool_check {
+                Ok(out) => out.status.success() && !out.stdout.is_empty(),
+                Err(_) => false,
+            };
+
+            if !has_bundletool {
+                return Err(anyhow!(
+                    "AAB (Android App Bundle) installation requires bundletool. Please convert the AAB to APK, or install bundletool (`brew install bundletool`)."
+                ));
+            }
+
+            let adb_path = find_adb()?;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let temp_apks = std::env::temp_dir().join(format!("bundle_{}.apks", timestamp));
+
+            let build_out = Command::new("bundletool")
+                .args(&[
+                    "build-apks",
+                    &format!("--bundle={}", file_path),
+                    &format!("--output={}", temp_apks.to_string_lossy()),
+                    &format!("--adb={}", adb_path.to_string_lossy()),
+                    "--mode=default",
+                    "--overwrite",
+                ])
+                .output()?;
+
+            if !build_out.status.success() {
+                let err = String::from_utf8_lossy(&build_out.stderr);
+                return Err(anyhow!("bundletool build-apks failed: {}", err.trim()));
+            }
+
+            let install_out = Command::new("bundletool")
+                .args(&[
+                    "install-apks",
+                    &format!("--apks={}", temp_apks.to_string_lossy()),
+                    &format!("--device-id={}", serial),
+                    &format!("--adb={}", adb_path.to_string_lossy()),
+                ])
+                .output()?;
+
+            let _ = std::fs::remove_file(&temp_apks);
+
+            if install_out.status.success() {
+                Ok(format!("Successfully installed Android App Bundle {}", file_name))
+            } else {
+                let err = String::from_utf8_lossy(&install_out.stderr);
+                Err(anyhow!("bundletool install-apks failed: {}", err.trim()))
+            }
+        }
+        _ => {
+            let out = run_adb_cmd(&["-s", serial, "install", "-r", "-g", file_path])?;
+            if out.contains("Failure") {
+                Err(anyhow!("ADB install failed: {}", out))
+            } else {
+                Ok(format!("Successfully installed {}", file_name))
+            }
+        }
+    }
+}
+
+
+
+
 

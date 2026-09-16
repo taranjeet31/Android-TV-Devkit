@@ -10,6 +10,7 @@ import { LogcatViewer } from "./components/LogcatViewer";
 import { StudioWorkspace } from "./components/StudioWorkspace";
 import { MouseCapture } from "./components/MouseCapture";
 import { ADBTerminal } from "./components/ADBTerminal";
+import { AppManager } from "./components/AppManager";
 import {
   Tv,
   Keyboard,
@@ -26,6 +27,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   SquareTerminal,
+  Package,
 } from "lucide-react";
 import "./App.css";
 
@@ -72,6 +74,8 @@ function App() {
         return <DeviceManager />;
       case "workspace":
         return <StudioWorkspace />;
+      case "apps":
+        return <AppManager />;
       case "remote":
         return <VirtualRemote />;
       case "profiles":
@@ -132,6 +136,14 @@ function App() {
           >
             <Tv />
             <span>Devices Manager</span>
+          </div>
+          <div
+            className={`nav-item ${activeTab === "apps" ? "active" : ""}`}
+            onClick={() => setActiveTab("apps")}
+            title="App Launcher"
+          >
+            <Package />
+            <span>App Launcher</span>
           </div>
           <div
             className={`nav-item ${activeTab === "workspace" ? "active" : ""}`}

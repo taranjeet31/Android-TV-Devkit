@@ -60,19 +60,29 @@
     /* ── Virtual cursor ──────────────────────────────────────────────── */
     #virtual-cursor {
       position: fixed;
-      width: 36px; height: 36px;
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.85);
+      border: 2px solid #000;
       pointer-events: none;
-      z-index: 9999;
-      transform: translate(-3px, -3px); /* hotspot at top-left corner of arrow */
-      transition: opacity 0.2s ease, transform 0.05s ease;
+      z-index: 999999;
+      transition: transform 0.05s linear;
       opacity: 0;
     }
 
     #virtual-cursor.visible { opacity: 1; }
-    #virtual-cursor.pressed { transform: translate(-3px, -3px) scale(0.85); }
+    #virtual-cursor.pressed { transform: scale(0.85); }
+    #virtual-cursor.pulse { animation: cursor-pulse 150ms ease-out; }
 
-    /* SVG arrow cursor with high-contrast dual stroke & glow */
+    @keyframes cursor-pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(0.6); }
+      100% { transform: scale(1); }
+    }
+
+    /* SVG arrow cursor inside virtual-cursor */
     #virtual-cursor svg {
+      width: 100%; height: 100%;
       filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.85)) drop-shadow(0 0 4px rgba(59, 130, 246, 0.7));
     }
 
@@ -156,8 +166,15 @@
     function moveCursor(x, y) {
       vx = Math.max(0, Math.min(screenW - 1, x));
       vy = Math.max(0, Math.min(screenH - 1, y));
-      cursor.style.left = vx + 'px';
-      cursor.style.top  = vy + 'px';
+      const displayX = (vx / screenW) * window.innerWidth;
+      const displayY = (vy / screenH) * window.innerHeight;
+      cursor.style.transform = `translate(${displayX}px, ${displayY}px)`;
+    }
+
+    function triggerPulse() {
+      cursor.classList.remove('pulse');
+      void cursor.offsetWidth; // force reflow
+      cursor.classList.add('pulse');
     }
 
     function showCursor() {
@@ -169,8 +186,10 @@
     }
 
     function fireRipple(x, y) {
-      ripple.style.left = x + 'px';
-      ripple.style.top  = y + 'px';
+      const displayX = (x / screenW) * window.innerWidth;
+      const displayY = (y / screenH) * window.innerHeight;
+      ripple.style.left = displayX + 'px';
+      ripple.style.top  = displayY + 'px';
       ripple.classList.remove('active');
       void ripple.offsetWidth; // force reflow
       ripple.classList.add('active');
@@ -186,10 +205,12 @@
     let pointerDownY  = 0;
 
     function dispatchPointerAt(x, y, type, isPrimary) {
-      const el = document.elementFromPoint(x, y) || document.body;
+      const displayX = (x / screenW) * window.innerWidth;
+      const displayY = (y / screenH) * window.innerHeight;
+      const el = document.elementFromPoint(displayX, displayY) || document.body;
       const evt = new PointerEvent(type, {
         bubbles: true, cancelable: true,
-        clientX: x, clientY: y,
+        clientX: displayX, clientY: displayY,
         pointerId: 1, pointerType: 'mouse',
         isPrimary: true,
       });
@@ -198,15 +219,16 @@
     }
 
     function handleButtonDown(button) {
-      if (button !== 'left') return;
+      if (button !== 'left' && button !== 0 && button !== undefined) return;
       cursor.classList.add('pressed');
+      triggerPulse();
       pointerDownEl = dispatchPointerAt(vx, vy, 'pointerdown', true);
       pointerDownX  = vx;
       pointerDownY  = vy;
     }
 
     function handleButtonUp(button) {
-      if (button !== 'left') return;
+      if (button !== 'left' && button !== 0 && button !== undefined) return;
       cursor.classList.remove('pressed');
       dispatchPointerAt(vx, vy, 'pointerup', true);
 
@@ -217,8 +239,10 @@
         const el = dispatchPointerAt(vx, vy, 'click', true);
         fireRipple(vx, vy);
         // Also try the element directly as some TV apps listen for 'click'
+        const displayX = (vx / screenW) * window.innerWidth;
+        const displayY = (vy / screenH) * window.innerHeight;
         const clickEvt = new MouseEvent('click', {
-          bubbles: true, cancelable: true, clientX: vx, clientY: vy
+          bubbles: true, cancelable: true, clientX: displayX, clientY: displayY
         });
         el.dispatchEvent(clickEvt);
       }
@@ -301,10 +325,16 @@
           showCursor();
           break;
 
+        case 'move':
         case 'cursor_move':
-          moveCursor(vx + (msg.dx || 0), vy + (msg.dy || 0));
+          if (msg.x !== undefined && msg.y !== undefined) {
+            moveCursor(msg.x, msg.y);
+          } else {
+            moveCursor(vx + (msg.dx || 0), vy + (msg.dy || 0));
+          }
           break;
 
+        case 'click':
         case 'cursor_down':
           handleButtonDown(msg.button);
           break;

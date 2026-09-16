@@ -109,6 +109,19 @@ export const MouseCapture: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
   const [permChecked, setPermChecked] = useState(false);
+  const [showTvOverlay, setShowTvOverlay] = useState(false);
+
+  const handleToggleTvOverlay = async (enabled: boolean) => {
+    setShowTvOverlay(enabled);
+    if (enabled && selectedDevice) {
+      try {
+        await invoke("install_cursor_overlay", { deviceId: selectedDevice.serial });
+      } catch (err: any) {
+        console.error("Failed to install cursor overlay", err);
+        setErrorMsg(`Overlay setup failed: ${err.toString()}`);
+      }
+    }
+  };
 
   const clientPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cursorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -468,6 +481,20 @@ export const MouseCapture: React.FC = () => {
               </label>
               <p style={{ fontSize: "11px", color: "var(--color-text-muted)", marginTop: "4px" }}>
                 Unchecked: leaves your Mac desktop pointer visible while capturing mouse.
+              </p>
+            </div>
+            <div className="mc-setting" style={{ justifyContent: "center" }}>
+              <label className="mc-label" style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: "8px" }}>
+                <input
+                  type="checkbox"
+                  checked={showTvOverlay}
+                  onChange={(e) => handleToggleTvOverlay(e.target.checked)}
+                  style={{ width: "16px", height: "16px", accentColor: "var(--color-accent-primary)" }}
+                />
+                <span>Show cursor on TV</span>
+              </label>
+              <p style={{ fontSize: "11px", color: "var(--color-text-muted)", marginTop: "4px" }}>
+                Deploys native companion overlay service on target Android TV screen.
               </p>
             </div>
           </div>

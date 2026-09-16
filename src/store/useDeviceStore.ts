@@ -33,10 +33,23 @@ export interface NetworkRequest {
   duration_ms: number;
 }
 
+export interface AppInfo {
+  package_name: string;
+  label: string;
+  is_system: boolean;
+  installed_path: string;
+}
+
 interface DeviceState {
   devices: DeviceInfo[];
   selectedDevice: DeviceInfo | null;
   activeTab: string;
+  
+  // App Manager
+  installedApps: AppInfo[];
+  installedAppsLoading: boolean;
+  setInstalledApps: (apps: AppInfo[]) => void;
+  setInstalledAppsLoading: (loading: boolean) => void;
   
   // Logcat
   logs: LogLine[];
@@ -143,6 +156,12 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   devices: [],
   selectedDevice: null,
   activeTab: "devices",
+
+  // App Manager
+  installedApps: [],
+  installedAppsLoading: false,
+  setInstalledApps: (installedApps) => set({ installedApps }),
+  setInstalledAppsLoading: (installedAppsLoading) => set({ installedAppsLoading }),
   
   // Logcat
   logs: [],

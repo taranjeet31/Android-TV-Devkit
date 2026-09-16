@@ -28,6 +28,17 @@ pub enum CaptureState {
     Captured,
 }
 
+/// Event payload emitted to frontend for Tier 1 cursor overlay inside Screen Mirror
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorPositionPayload {
+    pub x: f64,
+    pub y: f64,
+    pub normalized: bool,
+    pub is_clicking: bool,
+    pub timestamp: u64,
+}
+
 /// Events the state machine accepts.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -205,6 +216,7 @@ fn run_state_machine(
                                 vy = screen_h / 2;
                                 *managed.virtual_cursor.lock().unwrap() = (vx, vy);
                                 let _ = app.emit("virtual-cursor-moved", (vx, vy));
+                                emit_cursor_position(&app, vx, vy, screen_w, screen_h, false);
                                 // Broadcast cursor_start
                                 if let Some(ws) = &ws_handle {
                                     let _ = ws.broadcast(&CursorMessage::CursorStart {
@@ -260,6 +272,7 @@ fn run_state_machine(
                         // Update shared cursor position & emit event
                         *managed.virtual_cursor.lock().unwrap() = (vx, vy);
                         let _ = app.emit("virtual-cursor-moved", (vx, vy));
+                        emit_cursor_position(&app, vx, vy, screen_w, screen_h, _btn_down.is_some());
                     }
                 }
                 Ok(CaptureEvent::ButtonDown(btn)) => {
@@ -268,6 +281,7 @@ fn run_state_machine(
                         _btn_down = Some(btn);
                         let button = btn_to_enum(btn);
                         let _ = app.emit("virtual-cursor-pressed", true);
+                        emit_cursor_position(&app, vx, vy, screen_w, screen_h, true);
                         if let Some(ws) = &ws_handle {
                             let _ = ws.broadcast(&CursorMessage::CursorDown { button });
                         }
@@ -277,6 +291,7 @@ fn run_state_machine(
                     if current_state == CaptureState::Captured {
                         let button = btn_to_enum(btn);
                         let _ = app.emit("virtual-cursor-pressed", false);
+                        emit_cursor_position(&app, vx, vy, screen_w, screen_h, false);
                         if let Some(ws) = &ws_handle {
                             let _ = ws.broadcast(&CursorMessage::CursorUp { button });
                         }
@@ -343,12 +358,14 @@ fn run_state_machine(
                                     vy = (vy + sdy).clamp(0, screen_h - 1);
                                     *managed.virtual_cursor.lock().unwrap() = (vx, vy);
                                     let _ = app.emit("virtual-cursor-moved", (vx, vy));
+                                    emit_cursor_position(&app, vx, vy, screen_w, screen_h, _btn_down.is_some());
                                 }
                                 MouseEventKind::ButtonDown(btn) => {
                                     down_pos = Some((vx, vy));
                                     _btn_down = Some(btn);
                                     let button = btn_to_enum(btn);
                                     let _ = app.emit("virtual-cursor-pressed", true);
+                                    emit_cursor_position(&app, vx, vy, screen_w, screen_h, true);
                                     if let Some(ws) = &ws_handle {
                                         let _ = ws.broadcast(&CursorMessage::CursorDown { button });
                                     }
@@ -356,6 +373,7 @@ fn run_state_machine(
                                 MouseEventKind::ButtonUp(btn) => {
                                     let button = btn_to_enum(btn);
                                     let _ = app.emit("virtual-cursor-pressed", false);
+                                    emit_cursor_position(&app, vx, vy, screen_w, screen_h, false);
                                     if let Some(ws) = &ws_handle {
                                         let _ = ws.broadcast(&CursorMessage::CursorUp { button });
                                     }
@@ -474,3 +492,24 @@ pub fn push_event(managed: &CaptureManagerState, event: CaptureEvent) -> bool {
     }
     false
 }
+
+fn emit_cursor_position(app: &AppHandle, vx: i32, vy: i32, screen_w: i32, screen_h: i32, is_clicking: bool) {
+    let norm_x = if screen_w > 0 { (vx as f64 / screen_w as f64).clamp(0.0, 1.0) } else { 0.0 };
+    let norm_y = if screen_h > 0 { (vy as f64 / screen_h as f64).clamp(0.0, 1.0) } else { 0.0 };
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let _ = app.emit(
+        "cursor-position",
+        CursorPositionPayload {
+            x: norm_x,
+            y: norm_y,
+            normalized: true,
+            is_clicking,
+            timestamp,
+        },
+    );
+}
+
